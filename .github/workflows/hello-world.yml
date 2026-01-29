@@ -1,32 +1,115 @@
-name: Hello World Workflow
+name: Build and Deploy Application
 
-# When should this workflow run?
-# These triggers respond to common development events
+# Control exactly when this workflow runs
+# Precision here prevents wasted resources and noise
 on:
   push:
-  pull_request:
+    # Only run for important branches
+    branches: [main, develop]
+    # Ignore documentation changes that don't affect the build
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
 
-# What work should be done?
-# Jobs run independently on separate virtual machines
+  pull_request:
+    branches: [main]
+    # Only run when code actually changes
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+
+  # Allow manual execution with parameters
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Where to deploy'
+        required: true
+        default: 'staging'
+        type: choice
+        options: [staging, production]
+
+# Configuration that applies to all jobs
+env:
+  NODE_VERSION: '18'
+
 jobs:
-  say-hello:
-    # Use Ubuntu Linux for consistency and tool availability
+  # First job: validate code quality
+  quality-check:
     runs-on: ubuntu-latest
 
-    # Steps execute sequentially within each job
+    # This job creates outputs that other jobs can use
+    outputs:
+      tests-passed: ${{ steps.test.outputs.passed }}
+
     steps:
-      # Download your repository's code into the virtual machine
-      - name: Get the code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Run commands just like you would locally
-      - name: Say hello
-        run: echo "Hello, GitHub Actions!"
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
 
-      # Access information about this workflow run
-      - name: Show context information
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check code style
+        run: npm run lint
+
+      - name: Run tests
+        id: test
         run: |
-          echo "Repository: ${{ github.repository }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Triggered by: ${{ github.event_name }}"
-          echo "User: ${{ github.actor }}"
+          npm test
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+  # Second job: build the application
+  # This only runs if quality checks pass
+  build:
+    runs-on: ubuntu-latest
+    needs: quality-check
+    # Skip build if it's just a documentation change
+    if: needs.quality-check.outputs.tests-passed == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      # Save the build output for other jobs
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-build
+          path: dist/
+
+  # Third job: deploy if everything worked
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [quality-check, build]
+    # Only deploy from main branch or manual triggers
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: application-build
+          path: dist/
+
+      - name: Deploy to environment
+        run: |
+          echo "Deploying to ${{ github.event.inputs.environment || 'staging' }}"
+          # Your deployment commands would go here
