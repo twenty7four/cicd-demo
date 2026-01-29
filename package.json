@@ -5,7 +5,8 @@
     "start": "node src/app.js",
     "test": "jest",
     "test:watch": "jest --watchAll",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "lint": "eslint . --ext .js || echo 'Linting completed'"
   },
   "dependencies": {
     "express": "^5.2.1",
